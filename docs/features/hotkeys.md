@@ -175,10 +175,16 @@ where a bare ⇧ combo would shadow typing.
 
 ## The Hyper Key
 
-`HyperKeyTap` turns one physical key — Caps Lock or a right-side modifier — into the ⌃⌥(⇧)⌘ chord
+`HyperKeyTap` turns one physical key — Caps Lock, Left Control or a right-side modifier — into the ⌃⌥(⇧)⌘ chord
 system-wide. It is a **modifying** `CGEventTap`, a separate layer from `HotKeyCenter` because Carbon
 cannot intercept a lone key at all. The rewritten flags flow onward into Carbon matching, so existing
 combo hotkeys fire from Hyper+key with no extra registration.
+
+This fork adds **Left Control** to the selector. macOS Keyboard → Modifier Keys maps Caps Lock's
+Control action to the right-control HID usage (`0x7000000E4`), while the physical Left Control
+reports `kVK_Control`. Selecting Left Control as Hyper therefore leaves Caps Lock acting as Control.
+Custom HID remaps that map Caps Lock to Left Control collapse that distinction; use macOS's Control
+action instead. Tinycast does not change the system's modifier-key settings.
 
 Which key is chosen persists as a `HyperKey` string raw value in `AppSettings` — renaming a case is a
 migration, and a removed case decodes to `.none`. **F-keys are deliberately not candidates:** the

@@ -60,6 +60,7 @@ struct DoubleTapDetectorTests {
         hyperChord()
         hyperRetargeting()
         hyperModifierIsolation()
+        hyperPhysicalKeys()
         recorderKeycaps()
         spelling()
         globeTap()
@@ -494,6 +495,18 @@ struct DoubleTapDetectorTests {
         }
     }
 
+    static func hyperPhysicalKeys() {
+        let left = HyperKeyPhysicalKey.leftControl
+        expect(HyperKeyPhysicalKey(rawValue: "leftControl") == left, "Left Control persists")
+        expect(left.tapKeyCode == kVK_Control, "Left Control watches its own keycode")
+        expect(!left.tapUsesKeyEvents, "Left Control uses modifier transitions")
+        expect(left.ownFlag == .maskControl, "Left Control contributes Control")
+        expect(!left.hasOriginalFunction, "Left Control has no Caps Lock quick-press action")
+        expect(
+            left.tapKeyCode != HyperKeyPhysicalKey.rightControl.tapKeyCode,
+            "Caps Lock mapped to Control by macOS remains a distinct Right Control event")
+    }
+
     static func hyperModifierIsolation() {
         let previousChord = KeyShortcut.displayedHyperChord
         defer { KeyShortcut.displayedHyperChord = previousChord }
@@ -503,7 +516,7 @@ struct DoubleTapDetectorTests {
             // Hyper adds left device bits; a remapped right key may retain its own bit too.
             let leftBits: UInt64 = includesShift ? 0x2B : 0x29
             let residues: [(HyperKeyPhysicalKey, UInt64)] = [
-                (.capsLock, 0), (.rightControl, 0x2000), (.rightOption, 0x40),
+                (.capsLock, 0), (.leftControl, 0), (.rightControl, 0x2000), (.rightOption, 0x40),
                 (.rightCommand, 0x10), (.rightShift, includesShift ? 0x4 : 0)
             ]
             for (physicalKey, residue) in residues {
