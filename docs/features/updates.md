@@ -6,6 +6,10 @@ release feed the website already reads is the feed the app reads.
 
 ## Invariants
 
+- **This personal fork is updated through Homebrew.** Its feed points to `ryanmiville/tinycast`,
+  whose `personal-vVERSION-BUILD` tags are deliberately outside `AppVersion`'s accepted shapes.
+  The in-app updater therefore cannot install upstream or fork releases. The `tinycast-personal`
+  cask omits `auto_updates` so `brew upgrade` installs each published fork build.
 - **Tinycast installs its own updates, and Homebrew stays out of the way.** Both casks declare
   `auto_updates true`, which is Homebrew's own flag for an app that manages its own version. `brew
   update && brew upgrade` therefore skips Tinycast entirely — it is never reported outdated, never
