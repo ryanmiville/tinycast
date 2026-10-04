@@ -1,5 +1,7 @@
 # Release
 
+This fork's nightly signed builds and Homebrew cask are described in [personal-fork.md](personal-fork.md).
+
 How a build reaches a user. The local development loop is in [development.md](development.md);
 the signing identity itself is in [signing.md](signing.md).
 
@@ -49,7 +51,7 @@ Removing that line would reintroduce exactly those three problems. See
 
 ## Pull request review
 
-There is no CI workflow. CodeRabbit reviews every PR against `.coderabbit.yaml`: it runs SwiftLint
+There is no pull-request CI workflow. CodeRabbit reviews every PR against `.coderabbit.yaml`: it runs SwiftLint
 with `.swiftlint.yml`, annotates the diff and applies the pre-merge checks. It is a reviewer, not a
 gate — it neither runs the harnesses nor builds the app, so the whole bar in
 [testing.md](testing.md#definition-of-done) is run locally before a PR is opened.
