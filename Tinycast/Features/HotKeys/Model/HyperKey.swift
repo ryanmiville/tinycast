@@ -5,6 +5,7 @@ import CoreGraphics
 enum HyperKeyPhysicalKey: String, CaseIterable, Identifiable, Sendable {
     case none
     case capsLock
+    case leftControl
     case rightControl, rightShift, rightOption, rightCommand
 
     var id: String { rawValue }
@@ -16,6 +17,7 @@ enum HyperKeyPhysicalKey: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .none: return "None"
         case .capsLock: return "Caps Lock (⇪)"
+        case .leftControl: return "Left Control (⌃)"
         case .rightControl: return "Right Control (⌃)"
         case .rightShift: return "Right Shift (⇧)"
         case .rightOption: return "Right Option (⌥)"
@@ -28,6 +30,7 @@ enum HyperKeyPhysicalKey: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .none: return nil
         case .capsLock: return kVK_CapsLock
+        case .leftControl: return kVK_Control
         case .rightControl: return kVK_RightControl
         case .rightShift: return kVK_RightShift
         case .rightOption: return kVK_RightOption
@@ -51,6 +54,7 @@ enum HyperKeyPhysicalKey: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .none: return nil
         case .capsLock: return .maskAlphaShift
+        case .leftControl: return .maskControl
         case .rightControl: return .maskControl
         case .rightShift: return .maskShift
         case .rightOption: return .maskAlternate
