@@ -140,3 +140,9 @@ Each item is explained in [testing.md](docs/testing.md#definition-of-done).
 - `./Scripts/lint.sh` is clean.
 - `grep -rln 'import AppKit\|import SwiftUI\|import Cocoa' Tinycast/Features/*/Model/` returns nothing.
 - Any doc your change made wrong is fixed in the same commit.
+
+## Personal fork maintenance
+
+Run validation, builds, signing and artifact publication in GitHub Actions, not on the work laptop.
+Local maintenance edits and pushes source, then installs the published Homebrew cask. Do not create
+or upload signing keys or locally built binaries. See [personal-fork.md](docs/personal-fork.md).
