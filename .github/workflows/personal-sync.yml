@@ -1,0 +1,103 @@
+name: Personal fork sync and release
+
+on:
+  push:
+    branches: [codex/personal]
+  schedule:
+    - cron: "17 8 * * *"
+  workflow_dispatch:
+    inputs:
+      force_release:
+        description: Rebuild even when the source has not changed
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: personal-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: github.repository == 'ryanmiville/tinycast' && github.ref == 'refs/heads/codex/personal'
+    runs-on: macos-26
+    timeout-minutes: 45
+    env:
+      GH_TOKEN: ${{ github.token }}
+      FORCE_RELEASE: ${{ inputs.force_release || 'false' }}
+      TINYCAST_TEST_JOBS: "2"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ssh-key: ${{ secrets.PERSONAL_SYNC_SSH_KEY }}
+
+      - name: Rebase personal commits on upstream
+        id: sync
+        run: ./Scripts/personal-sync.sh
+
+      - name: Select Xcode 26
+        if: steps.sync.outputs.changed == 'true'
+        run: |
+          XCODE_PATH="$(find /Applications -maxdepth 1 -name 'Xcode_26*.app' | sort -V | tail -n1)"
+          test -n "$XCODE_PATH"
+          echo "DEVELOPER_DIR=$XCODE_PATH/Contents/Developer" >> "$GITHUB_ENV"
+
+      - name: Install lint tool
+        if: steps.sync.outputs.changed == 'true'
+        run: brew install swiftlint
+
+      - name: Validate candidate
+        if: steps.sync.outputs.changed == 'true'
+        run: |
+          ./Scripts/run-tests.sh
+          ./Scripts/lint.sh
+          if rg -l 'import AppKit|import SwiftUI|import Cocoa' Tinycast/Features/*/Model/; then
+            echo "::error::A model imports a UI framework"
+            exit 1
+          fi
+          xcodebuild -project Tinycast.xcodeproj -scheme Tinycast -configuration Debug \
+            -derivedDataPath "$RUNNER_TEMP/Debug" CODE_SIGNING_ALLOWED=NO build
+
+      - name: Import stable fork signing identity
+        if: steps.sync.outputs.changed == 'true'
+        env:
+          SIGNING_P12_BASE64: ${{ secrets.PERSONAL_SIGNING_P12_BASE64 }}
+          SIGNING_P12_PASSWORD: ${{ secrets.PERSONAL_SIGNING_P12_PASSWORD }}
+        run: |
+          KEYCHAIN="$RUNNER_TEMP/personal-signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -base64 24)"
+          echo "$SIGNING_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/personal.p12"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security import "$RUNNER_TEMP/personal.p12" -k "$KEYCHAIN" \
+            -P "$SIGNING_P12_PASSWORD" -A -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security list-keychains -d user -s "$KEYCHAIN" "$HOME/Library/Keychains/login.keychain-db"
+          rm "$RUNNER_TEMP/personal.p12"
+          echo "PERSONAL_KEYCHAIN=$KEYCHAIN" >> "$GITHUB_ENV"
+
+      - name: Build and package signed release
+        if: steps.sync.outputs.changed == 'true'
+        run: ./Scripts/personal-package.sh
+
+      - name: Publish validated branches and release
+        if: steps.sync.outputs.changed == 'true'
+        run: |
+          git push --atomic \
+            --force-with-lease="refs/heads/codex/personal:$PERSONAL_START" \
+            --force-with-lease="refs/heads/main:$MAIN_START" \
+            origin HEAD:refs/heads/codex/personal refs/remotes/upstream/main:refs/heads/main
+          TAG="$(node -p 'require("./dist/fork-release.json").tag')"
+          VERSION="$(node -p 'require("./dist/fork-release.json").version')"
+          gh release create "$TAG" dist/Tinycast-Personal.zip dist/fork-release.json \
+            --repo ryanmiville/tinycast \
+            --target "$(git rev-parse HEAD)" --title "Tinycast Personal $VERSION" \
+            --notes-file dist/release-notes.md --latest
+
+      - name: Remove temporary signing keychain
+        if: always() && env.PERSONAL_KEYCHAIN != ''
+        run: security delete-keychain "$PERSONAL_KEYCHAIN"
