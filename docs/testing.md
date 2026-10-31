@@ -676,6 +676,10 @@ caches, TCC grants and login item, so this cannot disturb an installed copy.
   creates
 - Empty switcher search reads the complete recent list; title and body searches rank correctly and a
   superseded query never publishes
+- Typing in the switcher never blanks the list: title matches appear first, the highlight moves to the
+  top row as new rows land, and Return pressed mid-search opens the top row of the finished search
+- In a large collection results keep up with typing, and a backspace, an unrelated query and `strasse`
+  against a note holding "Straße" all still land on the full results
 - An Untitled note titles itself from its first line as it is typed, in the title bar and — after the
   autosave — in the browse list; naming it replaces that, and clearing the name brings it back
 - Inline rename updates the Markdown filename without changing source, and starts from that filename

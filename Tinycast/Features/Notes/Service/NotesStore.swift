@@ -18,6 +18,8 @@ final class NotesStore {
     private(set) var searchQuery = ""
     private(set) var searchResults: [NoteSearchResult] = []
     private(set) var isSearching = false
+    /// False until this search session's first rows land; until then the switcher keeps its list.
+    private(set) var hasSearchResults = false
     /// Derived from the live draft, not the last listing, so an unnamed note titles itself as typed.
     var activeTitle: String {
         guard let activeID else { return String(localized: "Notes") }
@@ -30,6 +32,7 @@ final class NotesStore {
     var activeFileURL: URL? { activeID.map(repository.fileURL(for:)) }
     private(set) var notesDirectory: URL
     var onIssue: ((Issue) -> Void)?
+    var onSearchSettled: (() -> Void)?
 
     private var repository: NotesRepository
     private let loadSelection: @Sendable () -> NoteID?
@@ -37,11 +40,15 @@ final class NotesStore {
     @ObservationIgnored private var saveDebounce: Task<Void, Never>?
     @ObservationIgnored private var saveTask: Task<Void, Never>?
     @ObservationIgnored private var searchTask: Task<Void, Never>?
-    @ObservationIgnored private var searchWorker: Task<[NoteSearchResult], Never>?
+    @ObservationIgnored private var runningScan: (query: String, worker: Task<[NoteSearchResult], Never>)?
+    /// Names, never text, of every match for the last finished query; a grown query reads only these.
+    @ObservationIgnored private var lastAnswer: (query: String, ids: [NoteID])?
     private var saveFailed = false
     /// A folder change that waits on a draft the old folder could not take yet.
     @ObservationIgnored private var pendingRelocation: NotesRepository?
     private var searchGeneration = 0
+    /// A narrowed pool this small reads about as fast as the title pass, which would add nothing.
+    private static let titlePassThreshold = 200
     @ObservationIgnored private var sourceRevision = 0
 
     init(
@@ -58,7 +65,7 @@ final class NotesStore {
     isolated deinit {
         saveDebounce?.cancel()
         searchTask?.cancel()
-        searchWorker?.cancel()
+        runningScan?.worker.cancel()
     }
 
     func start() async -> Bool {
@@ -157,6 +164,7 @@ final class NotesStore {
         switch result {
         case .success(let payload):
             summaries = payload.1
+            lastAnswer = nil
             return payload.0
         case .failure(let failure):
             publish(.operation(failure))
@@ -247,52 +255,79 @@ final class NotesStore {
     func updateSearchQuery(_ updated: String) {
         searchQuery = updated
         searchTask?.cancel()
-        searchWorker?.cancel()
         searchGeneration &+= 1
         let generation = searchGeneration
         let query = NoteSearch.Query(updated)
+        // A scan for a query this one only grows still finds every match, so it is worth finishing.
+        if let runningScan, !NoteSearch.narrows(updated, from: runningScan.query) {
+            runningScan.worker.cancel()
+            self.runningScan = nil
+        }
         guard !query.isEmpty else {
             searchResults = []
+            hasSearchResults = false
+            lastAnswer = nil
             isSearching = false
             searchTask = nil
-            searchWorker = nil
             return
         }
         isSearching = true
-        // The previous query's rows must not linger under the new query text.
-        searchResults = []
         let repository = repository
         let summaries = summaries
+        let pending = runningScan
+        let answered = pending != nil ? nil : lastAnswer.flatMap { last in
+            NoteSearch.narrows(updated, from: last.query) ? Set(last.ids) : nil
+        }
         searchTask = Task { [weak self] in
-            do {
-                try await Task.sleep(for: .milliseconds(120))
-            } catch {
-                return
-            }
-            guard let self, !Task.isCancelled else { return }
-            let worker = Task.detached(priority: .userInitiated) {
-                Signposts.interval("Notes.search") {
-                    repository.search(query, summaries: summaries)
+            var candidates = answered.map { ids in summaries.filter { ids.contains($0.id) } }
+            if (candidates?.count ?? .max) > Self.titlePassThreshold {
+                let head = await Task.detached(priority: .userInitiated) {
+                    NoteSearch.titleMatches(query, in: summaries)
+                }.value
+                guard let self, !Task.isCancelled, generation == self.searchGeneration else { return }
+                // No title match is no answer yet, so the rows on screen stay rather than blanking.
+                if !head.isEmpty {
+                    self.searchResults = head
+                    self.hasSearchResults = true
                 }
             }
-            self.searchWorker = worker
-            let results = await worker.value
+            guard let self, !Task.isCancelled else { return }
+            if candidates == nil, let pending {
+                let matches = await pending.worker.value
+                guard !Task.isCancelled, generation == self.searchGeneration else { return }
+                self.lastAnswer = (pending.query, matches.map(\.id))
+                let ids = Set(matches.map(\.id))
+                candidates = summaries.filter { ids.contains($0.id) }
+            }
+            let pool = candidates ?? summaries
+            let worker = Task.detached(priority: .userInitiated) {
+                Signposts.interval("Notes.search") {
+                    repository.search(query, summaries: pool, limit: .max)
+                }
+            }
+            self.runningScan = (updated, worker)
+            let matches = await worker.value
             guard !Task.isCancelled, generation == self.searchGeneration else { return }
-            self.searchResults = results
+            self.searchResults = Array(matches.prefix(NoteSearch.resultLimit))
+            self.hasSearchResults = true
+            self.lastAnswer = (updated, matches.map(\.id))
+            self.runningScan = nil
             self.isSearching = false
-            self.searchWorker = nil
             self.searchTask = nil
+            self.onSearchSettled?()
         }
     }
 
     func cancelSearch() {
         searchTask?.cancel()
         searchTask = nil
-        searchWorker?.cancel()
-        searchWorker = nil
+        runningScan?.worker.cancel()
+        runningScan = nil
+        lastAnswer = nil
         searchGeneration &+= 1
         searchQuery = ""
         searchResults = []
+        hasSearchResults = false
         isSearching = false
     }
 
@@ -327,6 +362,7 @@ final class NotesStore {
                 apply(document, summaries: summaries)
             } else {
                 self.summaries = summaries
+                lastAnswer = nil
             }
             return true
         case .failure(let failure):
@@ -358,6 +394,7 @@ final class NotesStore {
         switch result {
         case .success(let summaries):
             self.summaries = summaries
+            lastAnswer = nil
             isDirty = savedSource != source
             if !isDirty, let pending = pendingRelocation {
                 Task { [weak self] in await self?.relocate(to: pending) }
@@ -370,6 +407,7 @@ final class NotesStore {
 
     private func apply(_ document: NoteDocument?, summaries: [NoteSummary]) {
         self.summaries = summaries
+        lastAnswer = nil
         activeID = document?.id
         source = document?.source ?? ""
         editorEpoch &+= 1

@@ -67,12 +67,9 @@ struct NoteSwitcherView: View {
     private var results: some View {
         if notes.visibleNotes.isEmpty {
             VStack(spacing: Theme.Spacing.md) {
-                SymbolImage(
-                    name: notes.isSearching ? "clock" : "text.page",
-                    size: Theme.Size.noteGlyph
-                )
-                .foregroundStyle(Theme.Colors.textSecondary)
-                Text(notes.isSearching ? "Searching notes…" : "No notes found")
+                SymbolImage(name: "text.page", size: Theme.Size.noteGlyph)
+                    .foregroundStyle(Theme.Colors.textSecondary)
+                Text("No notes found")
                     .foregroundStyle(Theme.Colors.textSecondary)
             }
             .frame(maxWidth: .infinity)

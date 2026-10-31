@@ -17,6 +17,8 @@ struct NotesTests {
         testSwitcherInteraction()
         testWindowPlacement()
         try await testStoreCollectionAndAutosave()
+        try await testSearchHoldsRowsAndLeadsWithTitles()
+        try await testSearchNarrowsFromTheLastAnswer()
         try await testStoreRefreshesExternalEdits()
         try await testStoreRefreshPreservesDrafts()
         try await testStoreRefreshRecoversFromFailures()
@@ -215,6 +217,154 @@ struct NotesTests {
         let renamed = try repository.rename(id: unnamed.id, title: "Shopping")
         let afterRename = try require((try repository.list()).first { $0.id == renamed })
         check("naming a note retires its derived title", afterRename.firstLine == nil)
+    }
+
+    private static func testSearchHoldsRowsAndLeadsWithTitles() async throws {
+        let root = temporaryRoot("search-rows")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let repository = try repository(in: root)
+        try FileManager.default.createDirectory(
+            at: repository.notesDirectory, withIntermediateDirectories: true)
+        for (title, body) in [
+            ("Project Plan", "kickoff"), ("Project Budget", "numbers"), ("Plan B", "fallback project"),
+            ("Groceries", "a project plan for dinner"), ("Misc", "nothing here"),
+        ] {
+            try body.write(
+                to: repository.fileURL(for: NoteID(rawValue: "\(title).md")), atomically: true,
+                encoding: .utf8)
+        }
+        let summaries = try repository.list()
+        func full(_ raw: String) -> [NoteID] {
+            repository.search(NoteSearch.Query(raw), summaries: summaries, limit: .max).map(\.id)
+        }
+        for raw in ["project", "plan", "project plan", "pro pl", "nothing", "zz"] {
+            let head = NoteSearch.titleMatches(NoteSearch.Query(raw), in: summaries).map(\.id)
+            check(
+                "title matches for “\(raw)” are the head of the full search",
+                head == Array(full(raw).prefix(head.count)))
+        }
+        check(
+            "a query no title holds has no title matches",
+            NoteSearch.titleMatches(NoteSearch.Query("nothing"), in: summaries).isEmpty)
+
+        let store = NotesStore(repository: repository)
+        var settled = 0
+        store.onSearchSettled = { settled += 1 }
+        _ = await store.start()
+        store.updateSearchQuery("project")
+        await waitUntil { !store.isSearching }
+        let first = store.searchResults
+        check(
+            "a finished search shows its rows and reports it settled",
+            store.hasSearchResults && first.map(\.id) == full("project") && settled == 1)
+
+        store.updateSearchQuery("nothing")
+        check(
+            "typing keeps the previous rows instead of clearing them",
+            store.isSearching && store.hasSearchResults && store.searchResults == first)
+        await waitUntil { !store.isSearching }
+        check(
+            "the held rows give way to the new query's rows",
+            store.searchResults.map(\.id) == full("nothing"))
+
+        store.updateSearchQuery("pro")
+        store.updateSearchQuery("project plan")
+        await waitUntil { !store.isSearching }
+        check(
+            "a superseded search neither publishes nor settles",
+            store.searchResults.map(\.id) == full("project plan") && settled == 3)
+
+        store.updateSearchQuery("  ")
+        check(
+            "a blank query drops the held rows",
+            !store.hasSearchResults && store.searchResults.isEmpty && !store.isSearching)
+        store.updateSearchQuery("plan")
+        await waitUntil { !store.isSearching }
+        store.cancelSearch()
+        check(
+            "cancelling the search drops the held rows",
+            !store.hasSearchResults && store.searchResults.isEmpty)
+    }
+
+    private static func testSearchNarrowsFromTheLastAnswer() async throws {
+        check("a longer term narrows", NoteSearch.narrows("proj", from: "pro"))
+        check("an added word narrows", NoteSearch.narrows("project plan", from: "project"))
+        check("word order does not matter", NoteSearch.narrows("plan project", from: "proj"))
+        check("a trailing space narrows", NoteSearch.narrows("project ", from: "project"))
+        check("a shorter term does not narrow", !NoteSearch.narrows("pro", from: "proj"))
+        check("a different term does not narrow", !NoteSearch.narrows("prof", from: "proj"))
+        check("a dropped word does not narrow", !NoteSearch.narrows("project", from: "project plan"))
+        check("an empty previous query does not narrow", !NoteSearch.narrows("p", from: " "))
+        check(
+            "a term cut inside a folded pair does not narrow",
+            !NoteSearch.narrows("strass", from: "stras") && !NoteSearch.narrows("fix", from: "f")
+                && !NoteSearch.narrows("SS", from: "s"))
+        check("a term cut outside one still narrows", NoteSearch.narrows("strass", from: "stra"))
+
+        let root = temporaryRoot("search-narrow")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let repository = try repository(in: root)
+        try FileManager.default.createDirectory(
+            at: repository.notesDirectory, withIntermediateDirectories: true)
+        var notes: [(String, String)] = [
+            ("Project Plan", "kickoff"), ("Plan B", "fallback project"), ("Profile", "about me"),
+            ("Groceries", "a project plan for dinner"), ("Berlin", "Straße und ﬁx"), ("Misc", "nothing"),
+        ]
+        for index in 0..<230 {
+            notes.append(("Alpha \(index)", index.isMultiple(of: 3) ? "alphabet soup" : "alpha only"))
+        }
+        for (title, body) in notes {
+            try body.write(
+                to: repository.fileURL(for: NoteID(rawValue: "\(title).md")), atomically: true,
+                encoding: .utf8)
+        }
+        let store = NotesStore(repository: repository)
+        _ = await store.start()
+        func full(_ raw: String) -> [NoteID] {
+            repository.search(NoteSearch.Query(raw), summaries: store.summaries).map(\.id)
+        }
+        let typed = [
+            "p", "pr", "pro", "proj", "project", "project p", "project plan", "pro", "prof",
+            "s", "st", "str", "stra", "stras", "strass", "strasse", "f", "fi", "fix",
+            "alpha", "alphab", "alphabet", "zz", "zzz",
+        ]
+        var landed = true
+        for raw in typed {
+            store.updateSearchQuery(raw)
+            landed = await waitUntil { !store.isSearching } && landed
+            check(
+                "a search typed one key at a time for “\(raw)” matches the full search",
+                store.searchResults.map(\.id) == full(raw))
+        }
+        check("every narrowed search settled", landed)
+
+        for raw in ["p", "pr", "pro", "proj", "proje", "projec", "project", "project p", "project pl"] {
+            store.updateSearchQuery(raw)
+        }
+        await waitUntil { !store.isSearching }
+        check(
+            "keys typed faster than the search still land on the full answer",
+            store.searchResults.map(\.id) == full("project pl"))
+        for raw in ["a", "al", "alp", "x", "alpha", "alphab"] {
+            store.updateSearchQuery(raw)
+        }
+        await waitUntil { !store.isSearching }
+        check(
+            "a query that stops growing starts over and still lands on the full answer",
+            store.searchResults.map(\.id) == full("alphab"))
+
+        let activeID = try require(store.activeID)
+        store.updateSearchQuery("qq")
+        await waitUntil { !store.isSearching }
+        check("a query nothing matches lands empty", store.searchResults.isEmpty)
+        store.updateSource("qqq appears in the open note")
+        _ = await store.flush()
+        store.updateSearchQuery("qqq")
+        await waitUntil { !store.isSearching }
+        check(
+            "a save forgets the last answer, so a grown query finds a note that just started matching",
+            store.searchResults.map(\.id) == [activeID])
+        store.cancelSearch()
     }
 
     private static func testSwitcherInteraction() {

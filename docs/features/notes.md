@@ -28,7 +28,7 @@ commands and global shortcuts can show, search, or extend the collection.
   active note; an unsaved draft is retained, including after a failed save.
 - **Search is on demand and unindexed.** An empty switcher query reads metadata plus the head of every
   unnamed note; a nonempty query reads bodies sequentially off-main and retains no collection-sized
-  source cache.
+  source cache. Between keys it keeps the names of the last answer's matches, never their text.
 - **Off means no entry point or Notes work.** The feature is off by default; its shortcuts no-op, its
   commands are absent, and enabling alone does not enumerate or create the Notes directory.
 - **The collection may be empty.** Deleting the last note is allowed and creates no replacement; the
@@ -142,9 +142,20 @@ in-window screen — a note window may be 180pt tall, and the list must not be. 
 surface as a `PopoverMenu`, and its 240-point height is a ceiling rather than a size: the list reports
 its own height and the window shrinks to it with the top edge pinned. It travels with its host, dismisses
 like a popover when it resigns key, and closes outright when the last note goes. An empty query lists
-metadata by recency; a nonempty query searches titles and literal bodies after a 120-millisecond
-debounce. Results are capped at 200, and generation checks prevent superseded search or selection work
-from publishing.
+metadata by recency; a nonempty query searches titles and literal bodies as soon as it changes. Typing
+never clears the rows: they stay until the new query's rows land, and the first of those takes the
+highlight. A note whose title holds every term outranks any body match, so `NoteSearch.titleMatches`
+finds that band in the listing, with no file read, and shows it first; the body search then fills in
+below it.
+
+When every old term starts a new one, a note can match the new query only if it matched the old, so the
+body search reads just the last answer's matches, or lets a search still running for the shorter query
+finish and narrows from that instead of cancelling it. `NoteSearch.narrows` refuses a term cut inside a
+pair one character folds into, since a body holding "Straße" matches `strass` but not `stras`. Between
+keys the store keeps the names of the last answer's matches, never their text, and forgets them when the
+query empties, the listing changes or the switcher closes. Return during a search waits for it to
+settle, then opens the highlighted row. Results are capped at 200, and generation checks prevent
+superseded search or selection work from publishing.
 
 Arrow keys and Return do not intercept an inline rename. Command-Delete moves the selected row to Trash
 only while the switcher is not renaming; in the editor and title field it remains a native text command.
@@ -329,10 +340,10 @@ file was removed, loading chooses a remaining note, or the empty state when none
 ## Verification
 
 `Tests/notes-test.swift` compiles the shipped Notes model and service sources with the real fuzzy
-matcher. It covers repository safety, unique-name claiming, derived titles, search, selection,
-autosave, external reloads, draft preservation, empty collections, switcher interaction, and
-cancellation, plus the Markdown parser, every edit plan, the formatting each selection reports and the
-reveal policy.
+matcher. It covers repository safety, unique-name claiming, derived titles, search, held search rows,
+the title band and narrowing, selection, autosave, external reloads, draft preservation, empty collections,
+switcher interaction, and cancellation, plus the Markdown parser, every edit plan, the formatting each
+selection reports and the reveal policy.
 
 `Tests/notes-editor-test.swift` uses real TextKit 2 and AppKit undo objects. It runs the native
 Cut/Copy/Paste, the native find bar, Unicode and marked-text cases with rendering off and on, and covers

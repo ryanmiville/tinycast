@@ -40,6 +40,9 @@ final class NotesCoordinator {
     @ObservationIgnored var headingButtonFrame: CGRect = .zero
     private var switcherRename = NoteSwitcherRenameState()
     private var presentationGeneration = 0
+    /// Held rows keep the old highlight, so the first rows for a new query take it over.
+    @ObservationIgnored private var highlightsFirstResult = false
+    @ObservationIgnored private var opensSelectionWhenSearchSettles = false
 
     @ObservationIgnored private let saveFormattingBarExpanded: @Sendable (Bool) -> Void
 
@@ -58,6 +61,7 @@ final class NotesCoordinator {
         self.isFormattingBarExpanded = isFormattingBarExpanded
         self.saveFormattingBarExpanded = saveFormattingBarExpanded
         store.onIssue = { [weak self] issue in self?.present(issue) }
+        store.onSearchSettled = { [weak self] in self?.switcherSearchDidSettle() }
     }
 
     var editorInput: NoteEditorInput {
@@ -76,16 +80,14 @@ final class NotesCoordinator {
     var searchQueryBinding: Binding<String> {
         Binding(
             get: { [weak self] in self?.store.searchQuery ?? "" },
-            set: { [weak self] in self?.store.updateSearchQuery($0) })
+            set: { [weak self] in self?.updateSearchQuery($0) })
     }
 
     var activeTitle: String { store.activeTitle }
     var rendersMarkdown: Bool { settings.notesRendersMarkdown }
     var showsFormattingBar: Bool { settings.notesRendersMarkdown && settings.notesShowsFormattingBar }
-    var isSearching: Bool { store.isSearching }
     var visibleNotes: [NoteSummary] {
-        store.searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            ? store.summaries : store.searchResults.map(\.summary)
+        store.hasSearchResults ? store.searchResults.map(\.summary) : store.summaries
     }
     var switcherEditingID: NoteID? { switcherRename.id }
     var isRenamingSwitcherNote: Bool { switcherRename.isActive }
@@ -160,6 +162,8 @@ final class NotesCoordinator {
 
     func closeSwitcher(focusEditor: Bool = true) {
         guard isSwitcherPresented || !store.searchQuery.isEmpty else { return }
+        highlightsFirstResult = false
+        opensSelectionWhenSearchSettles = false
         switcherRename.cancel()
         isSwitcherPresented = false
         switcherSelection = nil
@@ -193,6 +197,11 @@ final class NotesCoordinator {
             switcherSelection = nil
             return
         }
+        if highlightsFirstResult, store.hasSearchResults {
+            highlightsFirstResult = false
+            switcherSelection = notes.first?.id
+            return
+        }
         if let switcherSelection, notes.contains(where: { $0.id == switcherSelection }) { return }
         switcherSelection = notes.first?.id
     }
@@ -213,8 +222,20 @@ final class NotesCoordinator {
     }
 
     func selectSwitcherNote() {
+        // The rows on screen may still answer an earlier query, so Return waits for this one's.
+        guard !store.isSearching else {
+            opensSelectionWhenSearchSettles = true
+            return
+        }
         guard let switcherSelection else { return }
         select(switcherSelection)
+    }
+
+    private func switcherSearchDidSettle() {
+        reconcileSwitcherSelection()
+        guard opensSelectionWhenSearchSettles else { return }
+        opensSelectionWhenSearchSettles = false
+        selectSwitcherNote()
     }
 
     func activateSwitcherNote(_ id: NoteID) {
@@ -399,6 +420,12 @@ final class NotesCoordinator {
 
     func editorReady(_ textView: NoteTextView) {
         windowController.editorReady(textView)
+    }
+
+    private func updateSearchQuery(_ query: String) {
+        store.updateSearchQuery(query)
+        highlightsFirstResult = true
+        opensSelectionWhenSearchSettles = false
     }
 
     private func request(_ presentation: Presentation) {
