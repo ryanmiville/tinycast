@@ -160,7 +160,7 @@ struct NotesRepository: Sendable {
     func search(
         _ query: NoteSearch.Query,
         summaries: [NoteSummary],
-        limit: Int = 200
+        limit: Int = NoteSearch.resultLimit
     ) -> [NoteSearchResult] {
         guard !query.isEmpty, limit > 0 else { return [] }
         var results: [NoteSearchResult] = []

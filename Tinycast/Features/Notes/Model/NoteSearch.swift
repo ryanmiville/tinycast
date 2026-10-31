@@ -1,6 +1,8 @@
 import Foundation
 
 enum NoteSearch {
+    static let resultLimit = 200
+
     struct Query: Sendable {
         let terms: [String]
 
@@ -42,6 +44,13 @@ enum NoteSearch {
             band = 0
         }
         return NoteSearchResult(summary: summary, score: band + titleScore)
+    }
+
+    /// Every term in the title outranks any body match, so these rows head the full search's answer.
+    static func titleMatches(_ query: Query, in summaries: [NoteSummary]) -> [NoteSearchResult] {
+        Array(
+            summaries.compactMap { match(query: query, summary: $0, source: nil) }
+                .sorted(by: precedes).prefix(resultLimit))
     }
 
     static func precedes(_ lhs: NoteSearchResult, _ rhs: NoteSearchResult) -> Bool {

@@ -143,8 +143,12 @@ surface as a `PopoverMenu`, and its 240-point height is a ceiling rather than a 
 its own height and the window shrinks to it with the top edge pinned. It travels with its host, dismisses
 like a popover when it resigns key, and closes outright when the last note goes. An empty query lists
 metadata by recency; a nonempty query searches titles and literal bodies after a 120-millisecond
-debounce. Results are capped at 200, and generation checks prevent superseded search or selection work
-from publishing.
+debounce. Typing never clears the rows: they stay until the new query's rows land, and the first of
+those takes the highlight. A note whose title holds every term outranks any body match, so
+`NoteSearch.titleMatches` finds that band in the listing, with no file read, and shows it before the
+debounce; the body search then fills in below it. Return during a search waits for it to settle, then
+opens the highlighted row. Results are capped at 200, and generation checks prevent superseded search
+or selection work from publishing.
 
 Arrow keys and Return do not intercept an inline rename. Command-Delete moves the selected row to Trash
 only while the switcher is not renaming; in the editor and title field it remains a native text command.
@@ -329,10 +333,10 @@ file was removed, loading chooses a remaining note, or the empty state when none
 ## Verification
 
 `Tests/notes-test.swift` compiles the shipped Notes model and service sources with the real fuzzy
-matcher. It covers repository safety, unique-name claiming, derived titles, search, selection,
-autosave, external reloads, draft preservation, empty collections, switcher interaction, and
-cancellation, plus the Markdown parser, every edit plan, the formatting each selection reports and the
-reveal policy.
+matcher. It covers repository safety, unique-name claiming, derived titles, search, held search rows
+and the title band, selection, autosave, external reloads, draft preservation, empty collections,
+switcher interaction, and cancellation, plus the Markdown parser, every edit plan, the formatting each
+selection reports and the reveal policy.
 
 `Tests/notes-editor-test.swift` uses real TextKit 2 and AppKit undo objects. It runs the native
 Cut/Copy/Paste, the native find bar, Unicode and marked-text cases with rendering off and on, and covers

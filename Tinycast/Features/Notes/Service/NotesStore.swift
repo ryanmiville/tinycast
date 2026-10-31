@@ -18,6 +18,8 @@ final class NotesStore {
     private(set) var searchQuery = ""
     private(set) var searchResults: [NoteSearchResult] = []
     private(set) var isSearching = false
+    /// False until this search session's first rows land; until then the switcher keeps its list.
+    private(set) var hasSearchResults = false
     /// Derived from the live draft, not the last listing, so an unnamed note titles itself as typed.
     var activeTitle: String {
         guard let activeID else { return String(localized: "Notes") }
@@ -30,6 +32,7 @@ final class NotesStore {
     var activeFileURL: URL? { activeID.map(repository.fileURL(for:)) }
     private(set) var notesDirectory: URL
     var onIssue: ((Issue) -> Void)?
+    var onSearchSettled: (() -> Void)?
 
     private var repository: NotesRepository
     private let loadSelection: @Sendable () -> NoteID?
@@ -253,23 +256,31 @@ final class NotesStore {
         let query = NoteSearch.Query(updated)
         guard !query.isEmpty else {
             searchResults = []
+            hasSearchResults = false
             isSearching = false
             searchTask = nil
             searchWorker = nil
             return
         }
         isSearching = true
-        // The previous query's rows must not linger under the new query text.
-        searchResults = []
         let repository = repository
         let summaries = summaries
         searchTask = Task { [weak self] in
+            let head = await Task.detached(priority: .userInitiated) {
+                NoteSearch.titleMatches(query, in: summaries)
+            }.value
+            guard let self, !Task.isCancelled, generation == self.searchGeneration else { return }
+            // No title match is no answer yet, so the rows on screen stay rather than blanking.
+            if !head.isEmpty {
+                self.searchResults = head
+                self.hasSearchResults = true
+            }
             do {
                 try await Task.sleep(for: .milliseconds(120))
             } catch {
                 return
             }
-            guard let self, !Task.isCancelled else { return }
+            guard !Task.isCancelled else { return }
             let worker = Task.detached(priority: .userInitiated) {
                 Signposts.interval("Notes.search") {
                     repository.search(query, summaries: summaries)
@@ -279,9 +290,11 @@ final class NotesStore {
             let results = await worker.value
             guard !Task.isCancelled, generation == self.searchGeneration else { return }
             self.searchResults = results
+            self.hasSearchResults = true
             self.isSearching = false
             self.searchWorker = nil
             self.searchTask = nil
+            self.onSearchSettled?()
         }
     }
 
@@ -293,6 +306,7 @@ final class NotesStore {
         searchGeneration &+= 1
         searchQuery = ""
         searchResults = []
+        hasSearchResults = false
         isSearching = false
     }
 

@@ -17,6 +17,7 @@ struct NotesTests {
         testSwitcherInteraction()
         testWindowPlacement()
         try await testStoreCollectionAndAutosave()
+        try await testSearchHoldsRowsAndLeadsWithTitles()
         try await testStoreRefreshesExternalEdits()
         try await testStoreRefreshPreservesDrafts()
         try await testStoreRefreshRecoversFromFailures()
@@ -215,6 +216,73 @@ struct NotesTests {
         let renamed = try repository.rename(id: unnamed.id, title: "Shopping")
         let afterRename = try require((try repository.list()).first { $0.id == renamed })
         check("naming a note retires its derived title", afterRename.firstLine == nil)
+    }
+
+    private static func testSearchHoldsRowsAndLeadsWithTitles() async throws {
+        let root = temporaryRoot("search-rows")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let repository = try repository(in: root)
+        try FileManager.default.createDirectory(
+            at: repository.notesDirectory, withIntermediateDirectories: true)
+        for (title, body) in [
+            ("Project Plan", "kickoff"), ("Project Budget", "numbers"), ("Plan B", "fallback project"),
+            ("Groceries", "a project plan for dinner"), ("Misc", "nothing here"),
+        ] {
+            try body.write(
+                to: repository.fileURL(for: NoteID(rawValue: "\(title).md")), atomically: true,
+                encoding: .utf8)
+        }
+        let summaries = try repository.list()
+        func full(_ raw: String) -> [NoteID] {
+            repository.search(NoteSearch.Query(raw), summaries: summaries, limit: .max).map(\.id)
+        }
+        for raw in ["project", "plan", "project plan", "pro pl", "nothing", "zz"] {
+            let head = NoteSearch.titleMatches(NoteSearch.Query(raw), in: summaries).map(\.id)
+            check(
+                "title matches for “\(raw)” are the head of the full search",
+                head == Array(full(raw).prefix(head.count)))
+        }
+        check(
+            "a query no title holds has no title matches",
+            NoteSearch.titleMatches(NoteSearch.Query("nothing"), in: summaries).isEmpty)
+
+        let store = NotesStore(repository: repository)
+        var settled = 0
+        store.onSearchSettled = { settled += 1 }
+        _ = await store.start()
+        store.updateSearchQuery("project")
+        await waitUntil { !store.isSearching }
+        let first = store.searchResults
+        check(
+            "a finished search shows its rows and reports it settled",
+            store.hasSearchResults && first.map(\.id) == full("project") && settled == 1)
+
+        store.updateSearchQuery("nothing")
+        check(
+            "typing keeps the previous rows instead of clearing them",
+            store.isSearching && store.hasSearchResults && store.searchResults == first)
+        await waitUntil { !store.isSearching }
+        check(
+            "the held rows give way to the new query's rows",
+            store.searchResults.map(\.id) == full("nothing"))
+
+        store.updateSearchQuery("pro")
+        store.updateSearchQuery("project plan")
+        await waitUntil { !store.isSearching }
+        check(
+            "a superseded search neither publishes nor settles",
+            store.searchResults.map(\.id) == full("project plan") && settled == 3)
+
+        store.updateSearchQuery("  ")
+        check(
+            "a blank query drops the held rows",
+            !store.hasSearchResults && store.searchResults.isEmpty && !store.isSearching)
+        store.updateSearchQuery("plan")
+        await waitUntil { !store.isSearching }
+        store.cancelSearch()
+        check(
+            "cancelling the search drops the held rows",
+            !store.hasSearchResults && store.searchResults.isEmpty)
     }
 
     private static func testSwitcherInteraction() {
