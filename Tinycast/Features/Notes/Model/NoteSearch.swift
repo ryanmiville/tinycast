@@ -46,6 +46,28 @@ enum NoteSearch {
         return NoteSearchResult(summary: summary, score: band + titleScore)
     }
 
+    /// True when each old term starts a new term, so no note can match `query` without `previous`.
+    static func narrows(_ query: String, from previous: String) -> Bool {
+        let old = Query(previous).terms
+        let new = Query(query).terms
+        return !old.isEmpty && old.allSatisfy { term in
+            new.contains { $0.hasPrefix(term) && !splitsFold($0, after: term.count) }
+        }
+    }
+
+    /// Pairs one character folds into, as "ß" matches "ss"; a term cut between them is no prefix.
+    private static let foldedPairs: Set<String> = [
+        "ss", "ff", "fi", "fl", "st", "ʼn", "aʾ", "αι", "ηι", "ωι", "եւ", "մն", "մե", "մի", "վն", "մխ"
+    ]
+
+    private static func splitsFold(_ term: String, after count: Int) -> Bool {
+        let characters = Array(term)
+        guard count > 0, count < characters.count else { return false }
+        let pair = String(characters[count - 1]) + String(characters[count])
+        return foldedPairs.contains(
+            pair.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil))
+    }
+
     /// Every term in the title outranks any body match, so these rows head the full search's answer.
     static func titleMatches(_ query: Query, in summaries: [NoteSummary]) -> [NoteSearchResult] {
         Array(
